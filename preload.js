@@ -315,4 +315,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Auto-start management
   getAutoStartEnabled: () => ipcRenderer.invoke("get-auto-start-enabled"),
   setAutoStartEnabled: (enabled) => ipcRenderer.invoke("set-auto-start-enabled", enabled),
+
+  // Plugin system
+  getPluginList: () => ipcRenderer.invoke("get-plugin-list"),
+  pluginInvoke: (channel, ...args) => ipcRenderer.invoke(`plugin:${channel}`, ...args),
+  pluginSend: (channel, ...args) => ipcRenderer.send(`plugin:${channel}`, ...args),
+  onPluginEvent: (channel, callback) => {
+    const listener = (_event, ...args) => callback?.(...args);
+    ipcRenderer.on(`plugin:${channel}`, listener);
+    return () => ipcRenderer.removeListener(`plugin:${channel}`, listener);
+  },
 });

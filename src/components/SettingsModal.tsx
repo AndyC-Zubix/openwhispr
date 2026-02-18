@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Sliders,
@@ -11,11 +11,18 @@ import {
   BookOpen,
   ShieldCheck,
   Lock,
+  AudioWaveform,
+  Puzzle,
 } from "lucide-react";
 import SidebarModal, { SidebarItem } from "./ui/SidebarModal";
 import SettingsPage, { SettingsSectionType } from "./SettingsPage";
 
 export type { SettingsSectionType };
+
+const PLUGIN_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
+  AudioWaveform,
+  Puzzle,
+};
 
 interface SettingsModalProps {
   open: boolean;
@@ -25,6 +32,24 @@ interface SettingsModalProps {
 
 export default function SettingsModal({ open, onOpenChange, initialSection }: SettingsModalProps) {
   const { t } = useTranslation();
+  const [pluginItems, setPluginItems] = useState<SidebarItem<SettingsSectionType>[]>([]);
+
+  useEffect(() => {
+    window.electronAPI?.getPluginList?.()?.then((plugins: any[]) => {
+      if (!plugins?.length) return;
+      const items = plugins
+        .filter((p: any) => p.hasSettings)
+        .map((p: any) => ({
+          id: `plugin:${p.name}` as SettingsSectionType,
+          label: p.displayName || p.name,
+          icon: PLUGIN_ICONS[p.icon] || Puzzle,
+          description: `${p.displayName || p.name} plugin`,
+          group: t("settingsModal.groups.intelligence"),
+        }));
+      setPluginItems(items);
+    }).catch(() => {});
+  }, [open, t]);
+
   const sidebarItems: SidebarItem<SettingsSectionType>[] = useMemo(
     () => [
       {
@@ -97,8 +122,9 @@ export default function SettingsModal({ open, onOpenChange, initialSection }: Se
         description: t("settingsModal.sections.developer.description"),
         group: t("settingsModal.groups.system"),
       },
+      ...pluginItems,
     ],
-    [t]
+    [t, pluginItems]
   );
 
   const [activeSection, setActiveSection] = React.useState<SettingsSectionType>("account");

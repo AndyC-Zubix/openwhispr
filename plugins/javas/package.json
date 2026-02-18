@@ -1,0 +1,11 @@
+{
+  "name": "openwhispr-plugin-javas",
+  "version": "0.1.0",
+  "description": "Voice-activated assistant plugin for OpenWhispr - wake word detection + LLM-powered command execution",
+  "main": "index.js",
+  "private": true,
+  "dependencies": {
+    "@picovoice/porcupine-node": "^3.0.0",
+    "@picovoice/pvrecorder-node": "^1.2.8"
+  }
+}

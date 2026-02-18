@@ -160,6 +160,7 @@ const GlobeKeyManager = require("./src/helpers/globeKeyManager");
 const DevServerManager = require("./src/helpers/devServerManager");
 const WindowsKeyManager = require("./src/helpers/windowsKeyManager");
 const { i18nMain, changeLanguage } = require("./src/helpers/i18nMain");
+const pluginLoader = require("./src/helpers/pluginLoader");
 
 // Manager instances - initialized after app.whenReady()
 let debugLogger = null;
@@ -477,6 +478,26 @@ async function startApp() {
 
   // Phase 2: Initialize remaining managers after windows are visible
   initializeDeferredManagers();
+
+  // Phase 3: Load plugins
+  pluginLoader.loadAll({
+    ipcMain,
+    BrowserWindow,
+    getMainWindow: () => windowManager.mainWindow,
+    getControlPanel: () => windowManager.controlPanelWindow,
+    sendToRenderer(channel, data) {
+      const windows = BrowserWindow.getAllWindows();
+      for (const win of windows) {
+        if (!win.isDestroyed()) win.webContents.send(channel, data);
+      }
+    },
+    managers: {
+      environment: environmentManager,
+      whisper: whisperManager,
+      window: windowManager,
+      database: databaseManager,
+    },
+  });
 
   // Non-blocking server pre-warming
   const whisperSettings = {
@@ -854,6 +875,7 @@ if (gotSingleInstanceLock) {
   });
 
   app.on("will-quit", () => {
+    pluginLoader.unloadAll();
     if (authBridgeServer) {
       authBridgeServer.close();
       authBridgeServer = null;

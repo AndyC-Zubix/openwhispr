@@ -80,6 +80,17 @@ export default function ControlPanel() {
     loadTranscriptions();
   }, []);
 
+  // Plugin TTS: Handle Web Speech API requests from plugins
+  useEffect(() => {
+    const dispose = window.electronAPI?.onPluginEvent?.("javas:speak-web-speech", (data: any) => {
+      if (data?.text && window.speechSynthesis) {
+        const utterance = new SpeechSynthesisUtterance(data.text);
+        window.speechSynthesis.speak(utterance);
+      }
+    });
+    return () => { dispose?.(); };
+  }, []);
+
   useEffect(() => {
     if (updateStatus.updateDownloaded && !isDownloading) {
       toast({

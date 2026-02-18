@@ -71,7 +71,279 @@ export type SettingsSectionType =
   | "prompts"
   | "permissions"
   | "privacy"
-  | "developer";
+  | "developer"
+  | `plugin:${string}`;
+
+// Dynamic plugin settings panel - loads plugin UI via IPC
+function PluginSettingsPanel({ pluginName }: { pluginName: string }) {
+  const [PluginComponent, setPluginComponent] = React.useState<React.ComponentType | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    window.electronAPI?.getPluginList?.()?.then((plugins: any[]) => {
+      if (cancelled) return;
+      const plugin = plugins?.find((p: any) => p.name === pluginName);
+      if (plugin?.settingsPanel) {
+        try {
+          // Plugin settings components are registered via IPC events
+          // The plugin sends its rendered state through plugin events
+          // For now, we render a placeholder that communicates via IPC
+          setPluginComponent(() => () => <PluginSettingsIframe pluginName={pluginName} />);
+        } catch (err: any) {
+          setError(err.message);
+        }
+      }
+    }).catch((err: any) => {
+      if (!cancelled) setError(err.message);
+    });
+    return () => { cancelled = true; };
+  }, [pluginName]);
+
+  if (error) return <div className="text-destructive p-4">Failed to load plugin: {error}</div>;
+  if (!PluginComponent) return <div className="p-4 text-muted-foreground">Loading plugin settings...</div>;
+  return <PluginComponent />;
+}
+
+// Plugin settings rendered via IPC communication
+function PluginSettingsIframe({ pluginName }: { pluginName: string }) {
+  const [settings, setSettings] = React.useState<Record<string, any>>({});
+  const [status, setStatus] = React.useState<string>("idle");
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    setLoading(true);
+    window.electronAPI?.pluginInvoke?.(`${pluginName}:get-settings`)?.then((s: any) => {
+      if (s) setSettings(s);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+
+    const disposeState = window.electronAPI?.onPluginEvent?.(`${pluginName}:state-changed`, (data: any) => {
+      setStatus(data?.state || "idle");
+    });
+
+    const disposeSettings = window.electronAPI?.onPluginEvent?.(`${pluginName}:settings-changed`, (data: any) => {
+      if (data) setSettings(data);
+    });
+
+    return () => { disposeState?.(); disposeSettings?.(); };
+  }, [pluginName]);
+
+  const updateSetting = React.useCallback((key: string, value: any) => {
+    const updated = { ...settings, [key]: value };
+    setSettings(updated);
+    window.electronAPI?.pluginInvoke?.(`${pluginName}:update-settings`, updated);
+  }, [pluginName, settings]);
+
+  if (loading) return <div className="p-4 text-muted-foreground">Loading settings...</div>;
+
+  const enabled = settings.enabled;
+  const statusColors: Record<string, string> = {
+    idle: "bg-muted text-muted-foreground",
+    listening: "bg-green-500/10 text-green-500",
+    capturing: "bg-yellow-500/10 text-yellow-500",
+    processing: "bg-blue-500/10 text-blue-500",
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Enable toggle + status */}
+      <div className="rounded-lg border border-border/40 p-4 space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-medium">Voice Agent</h3>
+            <p className="text-xs text-muted-foreground">Listen for wake word and execute voice commands</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className={`text-xs px-2 py-1 rounded-full ${statusColors[status] || statusColors.idle}`}>
+              {status}
+            </span>
+            <button
+              onClick={() => updateSetting("enabled", !enabled)}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${enabled ? "bg-primary" : "bg-muted"}`}
+            >
+              <span className={`inline-block h-4 w-4 rounded-full bg-background transition-transform ${enabled ? "translate-x-6" : "translate-x-1"}`} />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {enabled && (
+        <>
+          {/* Picovoice Access Key */}
+          <div className="rounded-lg border border-border/40 p-4 space-y-3">
+            <h3 className="text-sm font-medium">Picovoice Setup</h3>
+            <div className="space-y-1.5">
+              <label className="text-xs text-muted-foreground">Access Key (free at picovoice.ai/console)</label>
+              <input
+                type="password"
+                value={settings.picovoiceAccessKey || ""}
+                onChange={(e) => updateSetting("picovoiceAccessKey", e.target.value)}
+                placeholder="Enter Picovoice Access Key"
+                className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
+              />
+            </div>
+          </div>
+
+          {/* Wake Word Settings */}
+          <div className="rounded-lg border border-border/40 p-4 space-y-3">
+            <h3 className="text-sm font-medium">Wake Word</h3>
+            <p className="text-xs text-muted-foreground">Say &quot;Jarvis&quot; to activate (phonetically close to &quot;Javas&quot;)</p>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-muted-foreground">Sensitivity: {settings.wakeSensitivity ?? 0.5}</label>
+                <input
+                  type="range" min="0.1" max="0.9" step="0.1"
+                  value={settings.wakeSensitivity ?? 0.5}
+                  onChange={(e) => updateSetting("wakeSensitivity", parseFloat(e.target.value))}
+                  className="w-full"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground">Silence timeout: {settings.silenceTimeout ?? 1.5}s</label>
+                <input
+                  type="range" min="0.5" max="5.0" step="0.5"
+                  value={settings.silenceTimeout ?? 1.5}
+                  onChange={(e) => updateSetting("silenceTimeout", parseFloat(e.target.value))}
+                  className="w-full"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* AI Provider */}
+          <div className="rounded-lg border border-border/40 p-4 space-y-3">
+            <h3 className="text-sm font-medium">AI Provider</h3>
+            <div className="space-y-3">
+              <select
+                value={settings.reasoningProvider || "local"}
+                onChange={(e) => updateSetting("reasoningProvider", e.target.value)}
+                className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
+              >
+                <option value="ollama">Ollama Docker GPU (Recommended)</option>
+                <option value="local">Local LLM via llama.cpp (Free, Offline)</option>
+                <option value="claude-max">Claude Max Proxy (Free w/ subscription)</option>
+                <option value="openai">OpenAI</option>
+                <option value="anthropic">Anthropic</option>
+                <option value="gemini">Google Gemini</option>
+                <option value="groq">Groq</option>
+                <option value="custom">Custom Endpoint</option>
+              </select>
+
+              <div>
+                <label className="text-xs text-muted-foreground">Model</label>
+                <input
+                  type="text"
+                  value={settings.reasoningModel || ""}
+                  onChange={(e) => updateSetting("reasoningModel", e.target.value)}
+                  placeholder="e.g., gpt-4o-mini, claude-sonnet-4-5"
+                  className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
+                />
+              </div>
+
+              {/* API key for cloud providers */}
+              {["openai", "anthropic", "gemini", "groq"].includes(settings.reasoningProvider) && (
+                <div>
+                  <label className="text-xs text-muted-foreground">API Key</label>
+                  <input
+                    type="password"
+                    value={settings[`${settings.reasoningProvider}ApiKey`] || ""}
+                    onChange={(e) => updateSetting(`${settings.reasoningProvider}ApiKey`, e.target.value)}
+                    placeholder={`Enter ${settings.reasoningProvider} API key`}
+                    className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
+                  />
+                </div>
+              )}
+
+              {/* Ollama URL */}
+              {settings.reasoningProvider === "ollama" && (
+                <div>
+                  <label className="text-xs text-muted-foreground">Ollama URL</label>
+                  <input
+                    type="text"
+                    value={settings.ollamaUrl || "http://localhost:11434"}
+                    onChange={(e) => updateSetting("ollamaUrl", e.target.value)}
+                    placeholder="http://localhost:11434"
+                    className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">Runs on your RTX GPU via Docker. Model: qwen2.5:3b</p>
+                </div>
+              )}
+
+              {/* Custom endpoint URL */}
+              {settings.reasoningProvider === "custom" && (
+                <div>
+                  <label className="text-xs text-muted-foreground">Endpoint URL</label>
+                  <input
+                    type="text"
+                    value={settings.customEndpointUrl || ""}
+                    onChange={(e) => updateSetting("customEndpointUrl", e.target.value)}
+                    placeholder="http://localhost:11434"
+                    className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* TTS Settings */}
+          <div className="rounded-lg border border-border/40 p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-medium">Text-to-Speech</h3>
+              <button
+                onClick={() => updateSetting("ttsEnabled", !settings.ttsEnabled)}
+                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${settings.ttsEnabled ? "bg-primary" : "bg-muted"}`}
+              >
+                <span className={`inline-block h-3 w-3 rounded-full bg-background transition-transform ${settings.ttsEnabled ? "translate-x-5" : "translate-x-1"}`} />
+              </button>
+            </div>
+            {settings.ttsEnabled && (
+              <div className="space-y-3">
+                <select
+                  value={settings.ttsProvider || "web-speech"}
+                  onChange={(e) => updateSetting("ttsProvider", e.target.value)}
+                  className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
+                >
+                  <option value="web-speech">Web Speech (Built-in, Free)</option>
+                  <option value="openai-tts">OpenAI TTS</option>
+                </select>
+                {settings.ttsProvider === "openai-tts" && (
+                  <select
+                    value={settings.ttsVoice || "alloy"}
+                    onChange={(e) => updateSetting("ttsVoice", e.target.value)}
+                    className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm"
+                  >
+                    <option value="alloy">Alloy</option>
+                    <option value="echo">Echo</option>
+                    <option value="fable">Fable</option>
+                    <option value="onyx">Onyx</option>
+                    <option value="nova">Nova</option>
+                    <option value="shimmer">Shimmer</option>
+                  </select>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Advanced */}
+          <div className="rounded-lg border border-border/40 p-4 space-y-3">
+            <h3 className="text-sm font-medium">Advanced</h3>
+            <div>
+              <label className="text-xs text-muted-foreground">Custom System Prompt</label>
+              <textarea
+                value={settings.customSystemPrompt || ""}
+                onChange={(e) => updateSetting("customSystemPrompt", e.target.value)}
+                placeholder="Override the default agent prompt..."
+                rows={4}
+                className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm resize-y"
+              />
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 interface SettingsPageProps {
   activeSection?: SettingsSectionType;
@@ -2239,6 +2511,11 @@ export default function SettingsPage({ activeSection = "general" }: SettingsPage
         );
 
       default:
+        // Handle plugin sections (id format: "plugin:pluginName")
+        if (activeSection?.startsWith("plugin:")) {
+          const pluginName = activeSection.slice("plugin:".length);
+          return <PluginSettingsPanel pluginName={pluginName} />;
+        }
         return null;
     }
   };

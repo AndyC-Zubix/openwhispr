@@ -564,6 +564,12 @@ declare global {
       onDeepgramSessionEnd?: (
         callback: (data: { audioDuration?: number; text?: string }) => void
       ) => () => void;
+
+      // Plugin system
+      getPluginList?: () => Promise<any[]>;
+      pluginInvoke?: (channel: string, ...args: any[]) => Promise<any>;
+      pluginSend?: (channel: string, ...args: any[]) => void;
+      onPluginEvent?: (channel: string, callback: (...args: any[]) => void) => () => void;
     };
 
     api?: {
